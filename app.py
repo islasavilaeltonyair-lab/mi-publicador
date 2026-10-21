@@ -8,6 +8,7 @@ import fal_client
 import requests
 import streamlit as st
 from google import genai
+from google.genai import types
 
 st.set_page_config(page_title="Mi Publicador", page_icon="📣")
 
@@ -39,22 +40,22 @@ VOCES = {
 
 # ---------- Funciones ----------
 def generar_texto(idea: str, tono: str) -> str:
-    client = genai.Client(api_key=GEMINI_KEY)
+    client = genai.Client(api_key=GEMINI_KEY, http_options=types.HttpOptions(timeout=20000))
     prompt = (
         f"Escribe una publicación para redes sociales en español con tono {tono}. "
         f"Tema o idea: {idea}. Devuelve solo el texto de la publicación, "
         "sin explicaciones, y puedes incluir algunos emojis y hashtags."
     )
-    modelos = ["gemini-flash-latest", "gemini-flash-lite-latest"]
+    modelos = ["gemini-flash-lite-latest", "gemini-flash-latest"]
     ultimo_error = None
     for modelo in modelos:
-        for intento in range(3):
+        for intento in range(2):
             try:
                 resp = client.models.generate_content(model=modelo, contents=prompt)
                 return resp.text.strip()
             except Exception as e:
                 ultimo_error = e
-                time.sleep(2 * (intento + 1))
+                time.sleep(1)
     raise ultimo_error
 
 
