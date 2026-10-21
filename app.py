@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+import random
 import tempfile
 import time
 import urllib.parse
@@ -63,17 +64,11 @@ def _texto_gemini(prompt: str, modelo: str) -> str:
     return resp.text.strip()
 
 
-def generar_texto(idea: str, tono: str) -> str:
-    prompt = (
-        f"Escribe una publicación para redes sociales en español con tono {tono}. "
-        f"Tema o idea: {idea}. Devuelve solo el texto de la publicación, "
-        "sin explicaciones, y puedes incluir algunos emojis y hashtags."
-    )
+def _llm(prompt: str) -> str:
     intentos = []
     if GROQ_KEY:
         intentos += [(_texto_groq, "llama-3.3-70b-versatile"), (_texto_groq, "llama-3.1-8b-instant")]
     intentos += [(_texto_gemini, "gemini-3.5-flash-lite"), (_texto_gemini, "gemini-3.1-flash-lite")]
-
     ultimo_error = None
     for funcion, modelo in intentos:
         try:
@@ -81,6 +76,39 @@ def generar_texto(idea: str, tono: str) -> str:
         except Exception as e:
             ultimo_error = e
     raise ultimo_error
+
+
+def generar_texto(idea: str, tono: str) -> str:
+    prompt = (
+        f"Escribe una publicación para redes sociales en español con tono {tono}. "
+        f"Tema o idea: {idea}. Devuelve solo el texto de la publicación, "
+        "sin explicaciones, y puedes incluir algunos emojis y hashtags."
+    )
+    return _llm(prompt)
+
+
+ESTILOS = {
+    "Fotorrealista": "ultra realistic professional photograph, 35mm lens, shallow depth of field, natural lighting, sharp focus, high detail, 8k",
+    "Cinematográfico": "cinematic still, dramatic lighting, golden hour, film grain, anamorphic lens, rich color grading, highly detailed",
+    "Ilustración digital": "polished digital illustration, vibrant colors, clean lines, detailed, trending on artstation",
+    "3D / Pixar": "3D render, soft studio lighting, smooth materials, vibrant colors, highly detailed, octane render",
+    "Anime": "high quality anime artwork, detailed background, vivid colors, studio quality, sharp lineart",
+    "Póster / Diseño": "modern graphic design poster, bold composition, clean layout, vibrant palette, high contrast",
+}
+
+
+def mejorar_prompt(descripcion: str, estilo: str) -> str:
+    pedido = (
+        "Convierte esta idea en un prompt detallado EN INGLÉS para un generador de imágenes. "
+        "Describe sujeto, escena, composición, iluminación, colores y ambiente en una sola frase larga "
+        "(máximo 60 palabras). No incluyas texto escrito dentro de la imagen. "
+        f"Estilo: {estilo}. Idea: {descripcion}. Devuelve solo el prompt, sin comillas ni explicaciones."
+    )
+    try:
+        base = _llm(pedido).strip().strip('"')
+    except Exception:
+        base = descripcion
+    return f"{base}, {ESTILOS[estilo]}"
 
 
 def _imagen_cloudflare(prompt: str) -> bytes:
@@ -91,7 +119,7 @@ def _imagen_cloudflare(prompt: str) -> bytes:
     r = requests.post(
         url,
         headers={"Authorization": f"Bearer {CF_TOKEN}"},
-        json={"prompt": prompt, "steps": 6},
+        json={"prompt": prompt, "steps": 8},
         timeout=60,
     )
     r.raise_for_status()
@@ -100,7 +128,7 @@ def _imagen_cloudflare(prompt: str) -> bytes:
 
 def _imagen_pollinations(prompt: str) -> bytes:
     q = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=1024&model=flux&nologo=true"
+    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=1024&model=flux&nologo=true&enhance=false&seed={random.randint(1, 999999)}"
     r = requests.get(url, timeout=90)
     r.raise_for_status()
     if "image" not in r.headers.get("content-type", ""):
@@ -198,17 +226,23 @@ texto = st.text_area("Texto final (puedes editarlo)", key="texto", height=180)
 
 st.header("2. Imagen")
 prompt_img = st.text_input(
-    "Describe la imagen (funciona mejor en inglés)",
-    placeholder="a cozy coffee shop at sunrise, warm light, photorealistic",
+    "Describe la imagen (puedes escribirlo en español)",
+    placeholder="una taza de café humeante sobre una mesa de madera junto a la ventana al amanecer",
 )
+estilo = st.selectbox("Estilo", list(ESTILOS.keys()))
+mejorar = st.checkbox("Mejorar mi descripción automáticamente (recomendado)", value=True)
 if st.button("Generar imagen", disabled=not prompt_img):
     with st.spinner("Generando imagen..."):
         try:
-            st.session_state["imagen"] = generar_imagen(prompt_img)
+            final = mejorar_prompt(prompt_img, estilo) if mejorar else f"{prompt_img}, {ESTILOS[estilo]}"
+            st.session_state["prompt_final"] = final
+            st.session_state["imagen"] = generar_imagen(final)
         except Exception as e:
             st.error(f"Error generando imagen: {e}")
 if st.session_state.get("imagen"):
     st.image(st.session_state["imagen"])
+    with st.expander("Ver el prompt que se usó"):
+        st.write(st.session_state.get("prompt_final", ""))
 
 st.header("3. Voz")
 voz = st.selectbox("Voz", list(VOCES.keys()))
