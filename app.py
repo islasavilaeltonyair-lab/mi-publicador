@@ -40,13 +40,13 @@ VOCES = {
 
 # ---------- Funciones ----------
 def generar_texto(idea: str, tono: str) -> str:
-    client = genai.Client(api_key=GEMINI_KEY, http_options=types.HttpOptions(timeout=20000))
+    client = genai.Client(api_key=GEMINI_KEY, http_options=types.HttpOptions(timeout=45000))
     prompt = (
         f"Escribe una publicación para redes sociales en español con tono {tono}. "
         f"Tema o idea: {idea}. Devuelve solo el texto de la publicación, "
         "sin explicaciones, y puedes incluir algunos emojis y hashtags."
     )
-    modelos = ["gemini-flash-lite-latest", "gemini-flash-latest"]
+    modelos = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-latest"]
     ultimo_error = None
     for modelo in modelos:
         for intento in range(2):
