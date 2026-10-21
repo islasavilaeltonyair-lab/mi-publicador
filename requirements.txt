@@ -1,0 +1,5 @@
+streamlit
+google-genai
+fal-client
+edge-tts
+requests
