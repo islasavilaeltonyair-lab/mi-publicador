@@ -3,3 +3,4 @@ google-genai
 fal-client
 edge-tts
 requests
+ddgs
