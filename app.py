@@ -1,6 +1,7 @@
 import asyncio
 import os
 import tempfile
+import time
 
 import edge_tts
 import fal_client
@@ -44,8 +45,17 @@ def generar_texto(idea: str, tono: str) -> str:
         f"Tema o idea: {idea}. Devuelve solo el texto de la publicación, "
         "sin explicaciones, y puedes incluir algunos emojis y hashtags."
     )
-    resp = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
-    return resp.text.strip()
+    modelos = ["gemini-flash-latest", "gemini-flash-lite-latest"]
+    ultimo_error = None
+    for modelo in modelos:
+        for intento in range(3):
+            try:
+                resp = client.models.generate_content(model=modelo, contents=prompt)
+                return resp.text.strip()
+            except Exception as e:
+                ultimo_error = e
+                time.sleep(2 * (intento + 1))
+    raise ultimo_error
 
 
 def generar_imagen(prompt: str) -> str:
