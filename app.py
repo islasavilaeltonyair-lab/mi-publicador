@@ -493,7 +493,7 @@ if st.session_state.get("imagen"):
 
 st.subheader("O usa una imagen o video que ya hiciste")
 st.caption("Créalo gratis con tu cuenta de Gemini (gemini.google.com) o ChatGPT, descárgalo y súbelo aquí.")
-img_sub = st.file_uploader("Subir imagen", type=["png", "jpg", "jpeg", "webp"], key="up_img")
+img_sub = st.file_uploader("Subir imagen", type=["png", "jpg", "jpeg", "jfif", "webp"], key="up_img")
 if img_sub is not None:
     clave = f"{img_sub.name}-{img_sub.size}"
     if st.session_state.get("img_subida") != clave:
@@ -505,7 +505,10 @@ if img_sub is not None:
         st.rerun()
 vid_sub = st.file_uploader("Subir video (MP4, máximo 50 MB)", type=["mp4", "mov"], key="up_vid")
 if vid_sub is not None:
-    st.video(vid_sub.getvalue())
+    if vid_sub.size > 50 * 1024 * 1024:
+        st.error("El video pesa más de 50 MB y Telegram no lo aceptará. Comprímelo o usa uno más corto.")
+    else:
+        st.video(vid_sub.getvalue())
 
 st.header("3. Voz")
 voz = st.selectbox("Voz", list(VOCES.keys()))
