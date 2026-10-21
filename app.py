@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import os
 import tempfile
 import time
+import urllib.parse
 
 import edge_tts
 import fal_client
@@ -25,8 +27,13 @@ if password and not st.session_state.get("autorizado"):
     st.stop()
 
 # ---------- Claves (se guardan en Secrets de Streamlit, nunca en el código) ----------
-os.environ["FAL_KEY"] = st.secrets["FAL_KEY"]
+FAL_KEY = st.secrets.get("FAL_KEY")  # opcional (de pago)
+if FAL_KEY:
+    os.environ["FAL_KEY"] = FAL_KEY
+CF_ACCOUNT = st.secrets.get("CLOUDFLARE_ACCOUNT_ID")  # opcional (gratis)
+CF_TOKEN = st.secrets.get("CLOUDFLARE_API_TOKEN")
 GEMINI_KEY = st.secrets["GEMINI_API_KEY"]
+GROQ_KEY = st.secrets.get("GROQ_API_KEY")  # opcional, muy rápido
 TG_TOKEN = st.secrets["TELEGRAM_BOT_TOKEN"]
 TG_CHANNEL = st.secrets["TELEGRAM_CHANNEL"]  # por ejemplo @mi_canal
 
@@ -39,32 +46,89 @@ VOCES = {
 
 
 # ---------- Funciones ----------
-def generar_texto(idea: str, tono: str) -> str:
+def _texto_groq(prompt: str, modelo: str) -> str:
+    r = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_KEY}"},
+        json={"model": modelo, "messages": [{"role": "user", "content": prompt}]},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
+
+
+def _texto_gemini(prompt: str, modelo: str) -> str:
     client = genai.Client(api_key=GEMINI_KEY, http_options=types.HttpOptions(timeout=45000))
+    resp = client.models.generate_content(model=modelo, contents=prompt)
+    return resp.text.strip()
+
+
+def generar_texto(idea: str, tono: str) -> str:
     prompt = (
         f"Escribe una publicación para redes sociales en español con tono {tono}. "
         f"Tema o idea: {idea}. Devuelve solo el texto de la publicación, "
         "sin explicaciones, y puedes incluir algunos emojis y hashtags."
     )
-    modelos = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+    intentos = []
+    if GROQ_KEY:
+        intentos += [(_texto_groq, "llama-3.3-70b-versatile"), (_texto_groq, "llama-3.1-8b-instant")]
+    intentos += [(_texto_gemini, "gemini-3.5-flash-lite"), (_texto_gemini, "gemini-3.1-flash-lite")]
+
     ultimo_error = None
-    for modelo in modelos:
-        for intento in range(2):
-            try:
-                resp = client.models.generate_content(model=modelo, contents=prompt)
-                return resp.text.strip()
-            except Exception as e:
-                ultimo_error = e
-                time.sleep(1)
+    for funcion, modelo in intentos:
+        try:
+            return funcion(prompt, modelo)
+        except Exception as e:
+            ultimo_error = e
     raise ultimo_error
 
 
-def generar_imagen(prompt: str) -> str:
-    resultado = fal_client.subscribe(
-        "fal-ai/flux/schnell",
-        arguments={"prompt": prompt, "image_size": "square_hd"},
+def _imagen_cloudflare(prompt: str) -> bytes:
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}"
+        "/ai/run/@cf/black-forest-labs/flux-1-schnell"
     )
-    return resultado["images"][0]["url"]
+    r = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {CF_TOKEN}"},
+        json={"prompt": prompt, "steps": 6},
+        timeout=60,
+    )
+    r.raise_for_status()
+    return base64.b64decode(r.json()["result"]["image"])
+
+
+def _imagen_pollinations(prompt: str) -> bytes:
+    q = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=1024&model=flux&nologo=true"
+    r = requests.get(url, timeout=90)
+    r.raise_for_status()
+    if "image" not in r.headers.get("content-type", ""):
+        raise RuntimeError("Pollinations no devolvió una imagen")
+    return r.content
+
+
+def _imagen_fal(prompt: str) -> bytes:
+    res = fal_client.subscribe(
+        "fal-ai/flux/schnell", arguments={"prompt": prompt, "image_size": "square_hd"}
+    )
+    return requests.get(res["images"][0]["url"], timeout=60).content
+
+
+def generar_imagen(prompt: str) -> bytes:
+    intentos = []
+    if CF_ACCOUNT and CF_TOKEN:
+        intentos.append(_imagen_cloudflare)
+    intentos.append(_imagen_pollinations)
+    if FAL_KEY:
+        intentos.append(_imagen_fal)
+    ultimo_error = None
+    for f in intentos:
+        try:
+            return f(prompt)
+        except Exception as e:
+            ultimo_error = e
+    raise ultimo_error
 
 
 def generar_voz(texto: str, voz: str) -> bytes:
@@ -89,11 +153,21 @@ def publicar(texto: str, imagen_url, audio_bytes):
     if imagen_url:
         if len(texto) <= 1000:
             resultados.append(
-                telegram("sendPhoto", {"chat_id": TG_CHANNEL, "photo": imagen_url, "caption": texto})
+                telegram(
+                    "sendPhoto",
+                    {"chat_id": TG_CHANNEL, "caption": texto},
+                    {"photo": ("imagen.jpg", imagen_url, "image/jpeg")},
+                )
             )
             texto = None
         else:
-            resultados.append(telegram("sendPhoto", {"chat_id": TG_CHANNEL, "photo": imagen_url}))
+            resultados.append(
+                telegram(
+                    "sendPhoto",
+                    {"chat_id": TG_CHANNEL},
+                    {"photo": ("imagen.jpg", imagen_url, "image/jpeg")},
+                )
+            )
     if texto:
         resultados.append(telegram("sendMessage", {"chat_id": TG_CHANNEL, "text": texto}))
     if audio_bytes:
